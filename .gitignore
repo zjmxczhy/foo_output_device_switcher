@@ -1,0 +1,37 @@
+# Build outputs
+/build/
+/dist/
+/dist/*.zip
+/.vs/
+**/obj/
+**/Debug/
+**/Release/
+**/x64/Release/
+**/Win32/Release/
+**/*.obj
+**/*.pch
+**/*.pdb
+**/*.ilk
+**/*.exp
+**/*.lib
+**/*.iobj
+**/*.ipdb
+**/*.tlog
+**/*.recipe
+**/*.lastbuildstate
+**/*.res
+
+# Required prebuilt libraries from the foobar2000 SDK.
+!third_party/foobar2000-sdk/foobar2000/shared/shared-Win32.lib
+!third_party/foobar2000-sdk/foobar2000/shared/shared-x64.lib
+
+# Visual Studio local files
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.VC.opendb
+*.ipch
+
+# Nested repository metadata
+**/.git/
+**/.git.disabled-for-parent-add/
