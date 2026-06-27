@@ -30,6 +30,8 @@ Remove-Item -Recurse -Force `
     (Join-Path $DistRoot "foo_output_device_switcher"), `
     (Join-Path $DistRoot "foo_output_device_switcher-x64"), `
     (Join-Path $DistRoot "foo_output_device_switcher-x86"), `
+    (Join-Path $DistRoot "foo_output_device_switcher-fb2k-x86"), `
+    (Join-Path $DistRoot "foo_output_device_switcher-fb2k1.5-1.6-x86"), `
     (Join-Path $DistRoot "foo_output_device_switcher-package") `
     -ErrorAction SilentlyContinue
 Remove-Item -Force `
@@ -37,8 +39,12 @@ Remove-Item -Force `
     (Join-Path $DistRoot "foo_output_device_switcher.zip"), `
     (Join-Path $DistRoot "foo_output_device_switcher-x64.fb2k-component"), `
     (Join-Path $DistRoot "foo_output_device_switcher-x86.fb2k-component"), `
+    (Join-Path $DistRoot "foo_output_device_switcher-fb2k-x86.fb2k-component"), `
+    (Join-Path $DistRoot "foo_output_device_switcher-fb2k1.5-1.6-x86.fb2k-component"), `
     (Join-Path $DistRoot "foo_output_device_switcher-x64.zip"), `
-    (Join-Path $DistRoot "foo_output_device_switcher-x86.zip") `
+    (Join-Path $DistRoot "foo_output_device_switcher-x86.zip"), `
+    (Join-Path $DistRoot "foo_output_device_switcher-fb2k-x86.zip"), `
+    (Join-Path $DistRoot "foo_output_device_switcher-fb2k1.5-1.6-x86.zip") `
     -ErrorAction SilentlyContinue
 
 $ManualX64 = Join-Path $DistRoot "foo_output_device_switcher-x64"
@@ -46,10 +52,10 @@ Copy-Payload $ManualX64 "x64" "x64"
 Compress-Archive -Path (Join-Path $ManualX64 "*") -DestinationPath (Join-Path $DistRoot "foo_output_device_switcher-x64.zip")
 Move-Item (Join-Path $DistRoot "foo_output_device_switcher-x64.zip") (Join-Path $DistRoot "foo_output_device_switcher-x64.fb2k-component") -Force
 
-$ManualX86 = Join-Path $DistRoot "foo_output_device_switcher-x86"
-Copy-Payload $ManualX86 "x86" "Win32"
-Compress-Archive -Path (Join-Path $ManualX86 "*") -DestinationPath (Join-Path $DistRoot "foo_output_device_switcher-x86.zip")
-Move-Item (Join-Path $DistRoot "foo_output_device_switcher-x86.zip") (Join-Path $DistRoot "foo_output_device_switcher-x86.fb2k-component") -Force
+$LegacyX86 = Join-Path $DistRoot "foo_output_device_switcher-fb2k-x86"
+Copy-Payload $LegacyX86 "x86" "Win32"
+Compress-Archive -Path (Join-Path $LegacyX86 "*") -DestinationPath (Join-Path $DistRoot "foo_output_device_switcher-fb2k-x86.zip")
+Move-Item (Join-Path $DistRoot "foo_output_device_switcher-fb2k-x86.zip") (Join-Path $DistRoot "foo_output_device_switcher-fb2k-x86.fb2k-component") -Force
 
 $PackageDir = Join-Path $DistRoot "foo_output_device_switcher-package"
 Copy-Payload $PackageDir "x86" "Win32"
@@ -58,8 +64,7 @@ Compress-Archive -Path (Join-Path $PackageDir "*") -DestinationPath (Join-Path $
 Move-Item (Join-Path $DistRoot "foo_output_device_switcher.zip") (Join-Path $DistRoot "foo_output_device_switcher.fb2k-component") -Force
 
 Write-Host "Manual x64 folder: $ManualX64"
-Write-Host "Manual x86 folder: $ManualX86"
+Write-Host "foobar2000 1.5/1.6 x86 folder: $LegacyX86"
 Write-Host "x64 package: $(Join-Path $DistRoot 'foo_output_device_switcher-x64.fb2k-component')"
-Write-Host "x86 package: $(Join-Path $DistRoot 'foo_output_device_switcher-x86.fb2k-component')"
+Write-Host "foobar2000 1.5/1.6 x86 package: $(Join-Path $DistRoot 'foo_output_device_switcher-fb2k-x86.fb2k-component')"
 Write-Host "combined package: $(Join-Path $DistRoot 'foo_output_device_switcher.fb2k-component')"
-

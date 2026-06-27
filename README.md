@@ -18,7 +18,13 @@ foobar2000 播放设备切换组件。
 
 ```text
 foo_output_device_switcher.fb2k-component
+foo_output_device_switcher-x64.fb2k-component
+foo_output_device_switcher-fb2k-x86.fb2k-component
 ```
+
+foobar2000 2.x 优先使用 `foo_output_device_switcher.fb2k-component` 或对应架构包。
+
+foobar2000 1.5 / 1.6 请使用 `foo_output_device_switcher-fb2k-x86.fb2k-component`。foobar2000 1.x 是 32 位程序，需要安装 x86 包。
 
 在 foobar2000 中打开：
 
@@ -43,8 +49,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_output_device_switch
 ```text
 dist\foo_output_device_switcher.fb2k-component
 dist\foo_output_device_switcher-x64.fb2k-component
-dist\foo_output_device_switcher-x86.fb2k-component
+dist\foo_output_device_switcher-fb2k-x86.fb2k-component
 ```
+
+当前 SDK 目标为 foobar2000 1.5 / 1.6 兼容 API。1.4 及更早版本不作为正式支持目标。
 
 ## 说明
 
@@ -53,4 +61,4 @@ dist\foo_output_device_switcher-x86.fb2k-component
 详细使用方法见：
 
 - [播放设备切换组件使用方法.md](播放设备切换组件使用方法.md)
-
+- [播放设备切换组件更新日志.md](播放设备切换组件更新日志.md)

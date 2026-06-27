@@ -82,7 +82,7 @@ void announce_device(const device_item& item) {
 void switch_device(int delta) {
     auto api = output_manager_v2::tryGet();
     if (!api.is_valid()) {
-        show_error(L"\u65E0\u6CD5\u8BBF\u95EE foobar2000 \u8F93\u51FA\u8BBE\u7F6E");
+        show_error(L"当前 foobar2000 版本不支持切换播放设备，请使用 foobar2000 1.5/1.6 或更高版本。");
         return;
     }
 
