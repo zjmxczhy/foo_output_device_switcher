@@ -3,6 +3,7 @@
 
 namespace {
 static const GUID guid_menu_group = { 0xa632c10c, 0xe83f, 0x46d3, { 0x95, 0x46, 0xf9, 0x5b, 0x9d, 0x1a, 0xba, 0xca } };
+static const GUID guid_cmd_current = { 0xdebf4392, 0xdad6, 0x42d6, { 0xbe, 0x3f, 0x9d, 0xb8, 0xd6, 0x56, 0xdb, 0x0f } };
 static const GUID guid_cmd_previous = { 0xa4f7c3a1, 0x6efb, 0x41c0, { 0x88, 0x9e, 0x0a, 0x7c, 0xbe, 0x4c, 0x2f, 0xbd } };
 static const GUID guid_cmd_next = { 0xf4a38e41, 0x50ea, 0x43db, { 0xad, 0x41, 0x3b, 0xdd, 0xc6, 0x10, 0xae, 0x91 } };
 
@@ -79,6 +80,33 @@ void announce_device(const device_item& item) {
     announce(wide_from_utf8(item.name.get_ptr()));
 }
 
+void announce_current_device() {
+    auto api = output_manager_v2::tryGet();
+    if (!api.is_valid()) {
+        show_error(L"当前 foobar2000 版本不支持查看播放设备，请使用 foobar2000 1.5/1.6 或更高版本。");
+        return;
+    }
+
+    std::vector<device_item> devices = enumerate_devices(api.get_ptr());
+    if (devices.empty()) {
+        show_error(L"\u6CA1\u6709\u53EF\u7528\u7684\u64AD\u653E\u8BBE\u5907");
+        return;
+    }
+
+    outputCoreConfig_t config = {};
+    api->getCoreConfig(config);
+
+    size_t current = find_current_device(devices, config);
+    if (current == SIZE_MAX) {
+        show_error(L"\u65E0\u6CD5\u786E\u5B9A\u5F53\u524D\u64AD\u653E\u8BBE\u5907");
+        return;
+    }
+
+    std::wstring message = L"\u5F53\u524D : ";
+    message += wide_from_utf8(devices[current].name.get_ptr());
+    announce(message);
+}
+
 void switch_device(int delta) {
     auto api = output_manager_v2::tryGet();
     if (!api.is_valid()) {
@@ -127,6 +155,7 @@ static mainmenu_group_popup_factory g_menu_group(
 class output_device_switcher_menu : public mainmenu_commands {
 public:
     enum {
+        cmd_current,
         cmd_previous,
         cmd_next,
         cmd_total
@@ -136,6 +165,7 @@ public:
 
     GUID get_command(t_uint32 index) override {
         switch (index) {
+        case cmd_current: return guid_cmd_current;
         case cmd_previous: return guid_cmd_previous;
         case cmd_next: return guid_cmd_next;
         default: uBugCheck();
@@ -144,6 +174,9 @@ public:
 
     void get_name(t_uint32 index, pfc::string_base& out) override {
         switch (index) {
+        case cmd_current:
+            set_utf8(out, L"\u67E5\u770B\u5F53\u524D\u64AD\u653E\u8BBE\u5907");
+            break;
         case cmd_previous:
             set_utf8(out, L"\u5207\u6362\u5230\u4E0A\u4E00\u4E2A\u64AD\u653E\u8BBE\u5907");
             break;
@@ -157,6 +190,9 @@ public:
 
     bool get_description(t_uint32 index, pfc::string_base& out) override {
         switch (index) {
+        case cmd_current:
+            set_utf8(out, L"\u7528 Tolk \u64AD\u62A5 foobar2000 \u5F53\u524D\u4F7F\u7528\u7684\u64AD\u653E\u8BBE\u5907\u3002");
+            return true;
         case cmd_previous:
             set_utf8(out, L"\u5C06 foobar2000 \u5207\u6362\u5230\u4E0A\u4E00\u4E2A\u64AD\u653E\u8BBE\u5907\uFF0C\u5E76\u7528 Tolk \u64AD\u62A5\u65B0\u8BBE\u5907\u3002");
             return true;
@@ -177,12 +213,20 @@ public:
     bool get_display(t_uint32 index, pfc::string_base& text, t_uint32& flags) override {
         get_name(index, text);
         flags = 0;
-        if (enumerate_devices().size() < 2) flags |= flag_disabled;
+        const size_t device_count = enumerate_devices().size();
+        if (index == cmd_current) {
+            if (device_count < 1) flags |= flag_disabled;
+        } else if (device_count < 2) {
+            flags |= flag_disabled;
+        }
         return true;
     }
 
     void execute(t_uint32 index, service_ptr_t<service_base>) override {
         switch (index) {
+        case cmd_current:
+            announce_current_device();
+            break;
         case cmd_previous:
             switch_device(-1);
             break;
