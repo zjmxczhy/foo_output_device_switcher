@@ -1,5 +1,5 @@
 #include "stdafx.h"
-#include "tolk_bridge.h"
+#include "speech_engine.h"
 
 namespace {
 static const GUID guid_menu_group = { 0xa632c10c, 0xe83f, 0x46d3, { 0x95, 0x46, 0xf9, 0x5b, 0x9d, 0x1a, 0xba, 0xca } };
@@ -76,7 +76,7 @@ size_t find_current_device(const std::vector<device_item>& devices, const output
 }
 
 void announce(const std::wstring& text) {
-    tolk_queue_speak(text.c_str(), true);
+    speech_queue_speak(text.c_str(), true);
 }
 
 void show_error(const wchar_t* text) {
@@ -398,13 +398,13 @@ public:
     bool get_description(t_uint32 index, pfc::string_base& out) override {
         switch (index) {
         case cmd_current:
-            set_utf8(out, L"\u7528 Tolk \u64AD\u62A5 foobar2000 \u5F53\u524D\u4F7F\u7528\u7684\u64AD\u653E\u8BBE\u5907\u3002");
+            set_utf8(out, L"\u6309\u5F53\u524D\u8BED\u97F3\u8BBE\u7F6E\u64AD\u62A5 foobar2000 \u5F53\u524D\u4F7F\u7528\u7684\u64AD\u653E\u8BBE\u5907\u3002");
             return true;
         case cmd_previous:
-            set_utf8(out, L"\u5C06 foobar2000 \u5207\u6362\u5230\u4E0A\u4E00\u4E2A\u64AD\u653E\u8BBE\u5907\uFF0C\u5E76\u7528 Tolk \u64AD\u62A5\u65B0\u8BBE\u5907\u3002");
+            set_utf8(out, L"\u5C06 foobar2000 \u5207\u6362\u5230\u4E0A\u4E00\u4E2A\u64AD\u653E\u8BBE\u5907\uFF0C\u5E76\u6309\u5F53\u524D\u8BED\u97F3\u8BBE\u7F6E\u64AD\u62A5\u65B0\u8BBE\u5907\u3002");
             return true;
         case cmd_next:
-            set_utf8(out, L"\u5C06 foobar2000 \u5207\u6362\u5230\u4E0B\u4E00\u4E2A\u64AD\u653E\u8BBE\u5907\uFF0C\u5E76\u7528 Tolk \u64AD\u62A5\u65B0\u8BBE\u5907\u3002");
+            set_utf8(out, L"\u5C06 foobar2000 \u5207\u6362\u5230\u4E0B\u4E00\u4E2A\u64AD\u653E\u8BBE\u5907\uFF0C\u5E76\u6309\u5F53\u524D\u8BED\u97F3\u8BBE\u7F6E\u64AD\u62A5\u65B0\u8BBE\u5907\u3002");
             return true;
         default:
             return false;
@@ -487,13 +487,13 @@ public:
     bool get_description(t_uint32 index, pfc::string_base& out) override {
         switch (index) {
         case cmd_current:
-            set_utf8(out, L"\u7528 Tolk \u64AD\u62A5 foobar2000 \u5F53\u524D\u7684\u64AD\u653E\u6A21\u5F0F\u3002");
+            set_utf8(out, L"\u6309\u5F53\u524D\u8BED\u97F3\u8BBE\u7F6E\u64AD\u62A5 foobar2000 \u5F53\u524D\u7684\u64AD\u653E\u6A21\u5F0F\u3002");
             return true;
         case cmd_previous:
-            set_utf8(out, L"\u5C06 foobar2000 \u5207\u6362\u5230\u4E0A\u4E00\u4E2A\u64AD\u653E\u6A21\u5F0F\uFF0C\u5E76\u7528 Tolk \u64AD\u62A5\u65B0\u6A21\u5F0F\u3002");
+            set_utf8(out, L"\u5C06 foobar2000 \u5207\u6362\u5230\u4E0A\u4E00\u4E2A\u64AD\u653E\u6A21\u5F0F\uFF0C\u5E76\u6309\u5F53\u524D\u8BED\u97F3\u8BBE\u7F6E\u64AD\u62A5\u65B0\u6A21\u5F0F\u3002");
             return true;
         case cmd_next:
-            set_utf8(out, L"\u5C06 foobar2000 \u5207\u6362\u5230\u4E0B\u4E00\u4E2A\u64AD\u653E\u6A21\u5F0F\uFF0C\u5E76\u7528 Tolk \u64AD\u62A5\u65B0\u6A21\u5F0F\u3002");
+            set_utf8(out, L"\u5C06 foobar2000 \u5207\u6362\u5230\u4E0B\u4E00\u4E2A\u64AD\u653E\u6A21\u5F0F\uFF0C\u5E76\u6309\u5F53\u524D\u8BED\u97F3\u8BBE\u7F6E\u64AD\u62A5\u65B0\u6A21\u5F0F\u3002");
             return true;
         default:
             return false;
@@ -576,13 +576,13 @@ public:
     bool get_description(t_uint32 index, pfc::string_base& out) override {
         switch (index) {
         case cmd_current:
-            set_utf8(out, L"\u7528 Tolk \u64AD\u62A5 foobar2000 \u5F53\u524D\u6D3B\u52A8\u7684\u64AD\u653E\u5217\u8868\u3002");
+            set_utf8(out, L"\u6309\u5F53\u524D\u8BED\u97F3\u8BBE\u7F6E\u64AD\u62A5 foobar2000 \u5F53\u524D\u6D3B\u52A8\u7684\u64AD\u653E\u5217\u8868\u3002");
             return true;
         case cmd_previous_play:
-            set_utf8(out, L"\u5207\u6362\u5230\u4E0A\u4E00\u4E2A\u64AD\u653E\u5217\u8868\u5E76\u64AD\u653E\u5176\u4E2D\u7684\u7126\u70B9\u6B4C\u66F2\u6216\u7B2C\u4E00\u9996\u6B4C\u66F2\uFF0C\u7136\u540E\u7528 Tolk \u64AD\u62A5\u64AD\u653E\u5217\u8868\u540D\u79F0\u3002");
+            set_utf8(out, L"\u5207\u6362\u5230\u4E0A\u4E00\u4E2A\u64AD\u653E\u5217\u8868\u5E76\u64AD\u653E\u5176\u4E2D\u7684\u7126\u70B9\u6B4C\u66F2\u6216\u7B2C\u4E00\u9996\u6B4C\u66F2\uFF0C\u7136\u540E\u6309\u5F53\u524D\u8BED\u97F3\u8BBE\u7F6E\u64AD\u62A5\u64AD\u653E\u5217\u8868\u540D\u79F0\u3002");
             return true;
         case cmd_next_play:
-            set_utf8(out, L"\u5207\u6362\u5230\u4E0B\u4E00\u4E2A\u64AD\u653E\u5217\u8868\u5E76\u64AD\u653E\u5176\u4E2D\u7684\u7126\u70B9\u6B4C\u66F2\u6216\u7B2C\u4E00\u9996\u6B4C\u66F2\uFF0C\u7136\u540E\u7528 Tolk \u64AD\u62A5\u64AD\u653E\u5217\u8868\u540D\u79F0\u3002");
+            set_utf8(out, L"\u5207\u6362\u5230\u4E0B\u4E00\u4E2A\u64AD\u653E\u5217\u8868\u5E76\u64AD\u653E\u5176\u4E2D\u7684\u7126\u70B9\u6B4C\u66F2\u6216\u7B2C\u4E00\u9996\u6B4C\u66F2\uFF0C\u7136\u540E\u6309\u5F53\u524D\u8BED\u97F3\u8BBE\u7F6E\u64AD\u62A5\u64AD\u653E\u5217\u8868\u540D\u79F0\u3002");
             return true;
         default:
             return false;

@@ -61,5 +61,5 @@ dist\foo_output_device_switcher-fb2k-x86.fb2k-component
 
 详细使用方法见：
 
-- [播放设备切换组件使用方法.md](播放设备切换组件使用方法.md)
-- [播放设备切换组件更新日志.md](播放设备切换组件更新日志.md)
+- [Foobar2000无障碍增强使用方法.md](Foobar2000无障碍增强使用方法.md)
+- [Foobar2000无障碍增强更新日志.md](Foobar2000无障碍增强更新日志.md)
