@@ -1,0 +1,14 @@
+# GitHub Linguist normally ignores third_party paths as vendored code.
+# This repository keeps the component source under the SDK layout, so count only
+# the component directory while keeping the rest of third_party excluded.
+third_party/** linguist-vendored=true
+third_party/foobar2000-sdk/foobar2000/foo_output_device_switcher/** linguist-vendored=false
+
+# Packaging and helper scripts should not decide the repository language.
+*.ps1 linguist-generated=true
+*.vcxproj linguist-generated=true
+*.filters linguist-generated=true
+*.user linguist-generated=true
+
+# Documentation is not source language.
+*.md linguist-documentation=true
