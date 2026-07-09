@@ -289,7 +289,7 @@ GitHub 发布页：https://github.com/zjmxczhy/foo_output_device_switcher/releas
 组件包中已经包含所需的 Tolk 文件，来源为：
 
 ```text
-third_party\tolk-with-zdsr
+https://github.com/boz700908/tolk
 ```
 
 安装组件包后不需要手动复制 `Tolk.dll`。

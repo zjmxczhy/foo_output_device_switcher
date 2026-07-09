@@ -11,7 +11,7 @@ foobar2000 无障碍增强组件。
 - 在 `播放 -> 播放列表` 中查看当前播放列表，或切换到上一个/下一个播放列表并播放。
 - 按 foobar2000 返回的设备、播放模式、播放列表顺序循环切换。
 - 使用 Tolk 播报当前状态和切换结果。
-- 使用 `third_party\tolk-with-zdsr` 中的 Tolk 运行库。
+- 使用 `third_party\tolk-with-zdsr` 中的 Tolk 运行库，来源为 <https://github.com/boz700908/tolk>。
 
 ## 安装
 
