@@ -1,5 +1,13 @@
 # foobar2000 无障碍增强组件更新日志
 
+## 0.2.1
+
+- 修复组件自带 Tolk 运行库可能与其他 foobar2000 组件携带的同名 DLL 互相占用或复用的问题。
+- 打包时将组件自带的 `Tolk.dll` 改名为 `TolkODS.dll`，并同步修改 Tolk 内部引用，确保组件优先加载自己的 Tolk 运行库。
+- 将 Tolk 引用的 NVDA、保益、争渡相关 DLL 改为组件专用文件名，降低与朗读歌词组件或其他组件发生 DLL 冲突的风险。
+- 新生成的安装包不再包含原始 `Tolk.dll`、`nvdaControllerClient32.dll`、`nvdaControllerClient64.dll`、`byctrl*.dll`、`ZDSRAPI*.dll` 文件名。
+- 调整发布安装包命名和结构，改为仅提供 `x64` 与 `x86` 两个单架构安装包，格式为 `foo_output_device_switcher-版本号-架构.fb2k-component`。
+
 ## 0.2.0
 
 - 组件显示名称统一改为 `foobar2000 无障碍增强`，DLL 文件名仍保持 `foo_output_device_switcher.dll`，方便后续升级维护。

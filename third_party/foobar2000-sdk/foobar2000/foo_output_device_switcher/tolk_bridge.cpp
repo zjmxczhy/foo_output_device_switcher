@@ -12,6 +12,9 @@ using Tolk_Silence_t = bool(__cdecl*)();
 enum task_kind { task_none, task_speak, task_silence, task_quit };
 
 HMODULE g_tolk = nullptr;
+HMODULE g_nvda_driver = nullptr;
+HMODULE g_boy_driver = nullptr;
+HMODULE g_zdsr_driver = nullptr;
 Tolk_Load_t pLoad = nullptr;
 Tolk_Unload_t pUnload = nullptr;
 Tolk_TrySAPI_t pTrySAPI = nullptr;
@@ -74,6 +77,50 @@ std::wstring current_dll_dir() {
     return slash == std::wstring::npos ? L"" : wide.substr(0, slash);
 }
 
+class scoped_tolk_load_environment {
+public:
+    explicit scoped_tolk_load_environment(const std::wstring& directory) {
+        m_mutex = CreateMutexW(nullptr, FALSE, L"Local\\foobar2000.tolk-runtime-load");
+        if (!m_mutex) return;
+
+        DWORD waitResult = WaitForSingleObject(m_mutex, 10000);
+        if (waitResult != WAIT_OBJECT_0 && waitResult != WAIT_ABANDONED) return;
+        m_locked = true;
+
+        DWORD required = GetDllDirectoryW(0, nullptr);
+        if (required > 0) {
+            std::vector<wchar_t> buffer(static_cast<size_t>(required) + 1);
+            DWORD copied = GetDllDirectoryW(static_cast<DWORD>(buffer.size()), buffer.data());
+            if (copied > 0 && copied < buffer.size()) {
+                m_previous.assign(buffer.data(), copied);
+                m_had_previous = true;
+            }
+        }
+
+        m_ready = !directory.empty() && SetDllDirectoryW(directory.c_str()) != FALSE;
+    }
+
+    ~scoped_tolk_load_environment() {
+        if (m_ready) SetDllDirectoryW(m_had_previous ? m_previous.c_str() : nullptr);
+        if (m_locked) ReleaseMutex(m_mutex);
+        if (m_mutex) CloseHandle(m_mutex);
+    }
+
+    bool ready() const { return m_ready; }
+
+private:
+    HANDLE m_mutex = nullptr;
+    bool m_locked = false;
+    bool m_ready = false;
+    bool m_had_previous = false;
+    std::wstring m_previous;
+};
+
+HMODULE load_runtime_file(const std::wstring& directory, const wchar_t* name) {
+    if (directory.empty() || !name || !*name) return nullptr;
+    return LoadLibraryW((directory + L"\\" + name).c_str());
+}
+
 void reset_tolk_symbols() {
     pLoad = nullptr;
     pUnload = nullptr;
@@ -91,12 +138,22 @@ bool ensure_loaded() {
     std::wstring tolk_dir = g_component_dir;
     if (!tolk_dir.empty()) tolk_dir += L"\\tolk";
 
-    if (!tolk_dir.empty()) SetDllDirectoryW(tolk_dir.c_str());
+    scoped_tolk_load_environment loadEnvironment(tolk_dir);
+    if (!loadEnvironment.ready()) return false;
+
+#ifdef _WIN64
+    if (!g_nvda_driver) g_nvda_driver = load_runtime_file(tolk_dir, L"ods-nvda-client-64bits.dll");
+    if (!g_boy_driver) g_boy_driver = load_runtime_file(tolk_dir, L"ods-br-x64.dll");
+    if (!g_zdsr_driver) g_zdsr_driver = load_runtime_file(tolk_dir, L"ods-zsr_x64.dll");
+#else
+    if (!g_nvda_driver) g_nvda_driver = load_runtime_file(tolk_dir, L"ods-nvda-client-32bits.dll");
+    if (!g_boy_driver) g_boy_driver = load_runtime_file(tolk_dir, L"ods-br.dll");
+    if (!g_zdsr_driver) g_zdsr_driver = load_runtime_file(tolk_dir, L"ods-zsr.dll");
+#endif
 
     std::wstring path = tolk_dir;
-    if (!path.empty()) path += L"\\Tolk.dll";
-    g_tolk = LoadLibraryW(path.empty() ? L"Tolk.dll" : path.c_str());
-    if (!g_tolk) g_tolk = LoadLibraryW(L"Tolk.dll");
+    if (!path.empty()) path += L"\\TolkODS.dll";
+    g_tolk = LoadLibraryW(path.c_str());
     if (!g_tolk) return false;
 
     pLoad = reinterpret_cast<Tolk_Load_t>(GetProcAddress(g_tolk, "Tolk_Load"));
@@ -258,4 +315,3 @@ void tolk_shutdown() {
 
     unload_direct();
 }
-

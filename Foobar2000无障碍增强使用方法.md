@@ -10,20 +10,16 @@
 
 ## 安装
 
-foobar2000 2.x 可使用：
+请按 foobar2000 的架构选择安装包：
 
 ```text
-foo_output_device_switcher.fb2k-component
-foo_output_device_switcher-x64.fb2k-component
+foo_output_device_switcher-0.2.1-x64.fb2k-component
+foo_output_device_switcher-0.2.1-x86.fb2k-component
 ```
 
-foobar2000 1.5 / 1.6 使用：
+foobar2000 2.x 的 x64 版本请安装 `x64` 包；foobar2000 2.x 的 x86 版本请安装 `x86` 包。
 
-```text
-foo_output_device_switcher-fb2k-x86.fb2k-component
-```
-
-foobar2000 1.x 是 32 位程序，请安装带 `fb2k-x86` 字样的安装包。后续 x86 包默认用于兼容 foobar2000 1.5 / 1.6。
+foobar2000 1.5 / 1.6 是 32 位程序，请安装 `x86` 包。后续 `x86` 包默认用于兼容 foobar2000 1.5 / 1.6。
 
 在 foobar2000 中打开：
 
@@ -318,7 +314,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_output_device_switch
 构建完成后会重新生成：
 
 ```text
-dist\foo_output_device_switcher.fb2k-component
-dist\foo_output_device_switcher-x64.fb2k-component
-dist\foo_output_device_switcher-fb2k-x86.fb2k-component
+dist\foo_output_device_switcher-0.2.1-x64.fb2k-component
+dist\foo_output_device_switcher-0.2.1-x86.fb2k-component
 ```
