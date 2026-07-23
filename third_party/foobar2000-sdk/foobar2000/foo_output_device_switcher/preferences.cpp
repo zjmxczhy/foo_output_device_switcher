@@ -74,6 +74,32 @@ std::wstring get_window_text(HWND wnd) {
     return buffer.data();
 }
 
+HWND find_descendant_by_class(HWND parent, const wchar_t* className) {
+    if (!parent || !className || !*className) return nullptr;
+
+    for (HWND child = GetWindow(parent, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
+        wchar_t childClass[128] = {};
+        GetClassNameW(child, childClass, static_cast<int>(std::size(childClass)));
+        if (_wcsicmp(childClass, className) == 0 && IsWindowVisible(child) && IsWindowEnabled(child)) {
+            return child;
+        }
+
+        HWND descendant = find_descendant_by_class(child, className);
+        if (descendant) return descendant;
+    }
+
+    return nullptr;
+}
+
+bool focus_preferences_tree(HWND page) {
+    HWND root = GetAncestor(page, GA_ROOT);
+    HWND tree = find_descendant_by_class(root, WC_TREEVIEWW);
+    if (!tree) return false;
+
+    SetFocus(tree);
+    return true;
+}
+
 LRESULT handle_tab_escape_edit(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, WNDPROC originalProc) {
     if (!originalProc) return DefWindowProcW(wnd, msg, wp, lp);
 
@@ -760,6 +786,10 @@ private:
 
     static LRESULT CALLBACK purpose_edit_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         about_preferences_instance* self = reinterpret_cast<about_preferences_instance*>(GetWindowLongPtrW(wnd, GWLP_USERDATA));
+        if (msg == WM_KEYDOWN && wp == VK_TAB && GetKeyState(VK_SHIFT) < 0) {
+            if (focus_preferences_tree(GetParent(wnd))) return 0;
+        }
+
         return handle_tab_escape_edit(wnd, msg, wp, lp, self ? self->m_purpose_edit_proc : nullptr);
     }
 

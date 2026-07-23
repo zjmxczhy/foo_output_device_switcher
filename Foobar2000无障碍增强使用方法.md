@@ -1,4 +1,4 @@
-# foobar2000 无障碍增强组件使用方法
+﻿# foobar2000 无障碍增强组件使用方法
 
 `foobar2000 无障碍增强` 是一个 foobar2000 组件，用于在播放菜单中查看和切换 foobar2000 使用的播放设备，也可以切换 foobar2000 的播放模式、播放列表，并通过屏幕阅读器/Tolk 或 SAPI5.1 播报当前设备、切换后的设备名称、切换后的播放模式或播放列表名称。组件还提供启动后隐藏 foobar2000 主窗口的设置，用于减少托盘模式下读屏读到幽灵窗口的问题。
 
@@ -13,8 +13,8 @@
 请按 foobar2000 的架构选择安装包：
 
 ```text
-foo_output_device_switcher-0.2.1-x64.fb2k-component
-foo_output_device_switcher-0.2.1-x86.fb2k-component
+foo_output_device_switcher-0.2.2-x64.fb2k-component
+foo_output_device_switcher-0.2.2-x86.fb2k-component
 ```
 
 foobar2000 2.x 的 x64 版本请安装 `x64` 包；foobar2000 2.x 的 x86 版本请安装 `x86` 包。
@@ -314,6 +314,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_output_device_switch
 构建完成后会重新生成：
 
 ```text
-dist\foo_output_device_switcher-0.2.1-x64.fb2k-component
-dist\foo_output_device_switcher-0.2.1-x86.fb2k-component
+dist\foo_output_device_switcher-0.2.2-x64.fb2k-component
+dist\foo_output_device_switcher-0.2.2-x86.fb2k-component
 ```
