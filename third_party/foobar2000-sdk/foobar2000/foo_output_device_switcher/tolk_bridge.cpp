@@ -29,6 +29,7 @@ bool g_locks_ready = false;
 
 HANDLE g_worker = nullptr;
 HANDLE g_event = nullptr;
+HANDLE g_stopped_event = nullptr;
 bool g_worker_quit = false;
 task_kind g_task = task_none;
 std::wstring g_task_text;
@@ -43,6 +44,23 @@ void init_locks_once() {
         g_locks_ready = true;
         return TRUE;
     }, nullptr, nullptr);
+}
+
+// Must be called while g_task_lock is held. A worker signals stopped_event
+// only after it has finished using the event and all Tolk entry points.
+void cleanup_finished_worker_locked() {
+    if (!g_worker || !g_stopped_event) return;
+    if (WaitForSingleObject(g_stopped_event, 0) != WAIT_OBJECT_0) return;
+
+    CloseHandle(g_worker);
+    g_worker = nullptr;
+    if (g_event) CloseHandle(g_event);
+    g_event = nullptr;
+    CloseHandle(g_stopped_event);
+    g_stopped_event = nullptr;
+    g_worker_quit = false;
+    g_task = task_none;
+    g_task_text.clear();
 }
 
 bool safe_try_sapi(Tolk_TrySAPI_t fn, bool enable) {
@@ -230,12 +248,18 @@ DWORD WINAPI worker_proc(void*) {
 
     silence_direct();
     unload_direct();
+    HANDLE stoppedEvent = nullptr;
+    EnterCriticalSection(&g_task_lock);
+    stoppedEvent = g_stopped_event;
+    LeaveCriticalSection(&g_task_lock);
+    if (stoppedEvent) SetEvent(stoppedEvent);
     return 0;
 }
 
 bool ensure_worker() {
     init_locks_once();
     EnterCriticalSection(&g_task_lock);
+    cleanup_finished_worker_locked();
     if (g_worker) {
         LeaveCriticalSection(&g_task_lock);
         return true;
@@ -250,8 +274,18 @@ bool ensure_worker() {
         return false;
     }
 
+    g_stopped_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!g_stopped_event) {
+        CloseHandle(g_event);
+        g_event = nullptr;
+        LeaveCriticalSection(&g_task_lock);
+        return false;
+    }
+
     g_worker = CreateThread(nullptr, 0, worker_proc, nullptr, 0, nullptr);
     if (!g_worker) {
+        CloseHandle(g_stopped_event);
+        g_stopped_event = nullptr;
         CloseHandle(g_event);
         g_event = nullptr;
         LeaveCriticalSection(&g_task_lock);
@@ -287,31 +321,38 @@ void tolk_shutdown() {
     init_locks_once();
     HANDLE worker = nullptr;
     HANDLE event = nullptr;
+    HANDLE stoppedEvent = nullptr;
     EnterCriticalSection(&g_task_lock);
+    cleanup_finished_worker_locked();
     if (g_worker) {
         g_worker_quit = true;
         g_task = task_quit;
         worker = g_worker;
         event = g_event;
+        stoppedEvent = g_stopped_event;
     }
     LeaveCriticalSection(&g_task_lock);
 
     if (event) SetEvent(event);
-    if (worker) WaitForSingleObject(worker, 5000);
+    if (!worker) {
+        unload_direct();
+        return;
+    }
+
+    const DWORD waitResult = stoppedEvent
+        ? WaitForSingleObject(stoppedEvent, 5000) : WAIT_FAILED;
+    if (waitResult != WAIT_OBJECT_0) {
+        // Never close handles or touch Tolk while the worker may still be in
+        // a screen reader call. The worker signals stopped_event after its
+        // final Tolk call, and the next lifecycle operation reclaims handles.
+        if (waitResult == WAIT_TIMEOUT) {
+            // No component logger is available here; leaving the handles
+            // owned by the worker is the important part of this path.
+        }
+        return;
+    }
 
     EnterCriticalSection(&g_task_lock);
-    if (g_worker) {
-        CloseHandle(g_worker);
-        g_worker = nullptr;
-    }
-    if (g_event) {
-        CloseHandle(g_event);
-        g_event = nullptr;
-    }
-    g_worker_quit = false;
-    g_task = task_none;
-    g_task_text.clear();
+    cleanup_finished_worker_locked();
     LeaveCriticalSection(&g_task_lock);
-
-    unload_direct();
 }
