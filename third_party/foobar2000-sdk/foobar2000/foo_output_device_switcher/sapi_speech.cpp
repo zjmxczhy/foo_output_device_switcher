@@ -2,15 +2,38 @@
 #include "sapi_speech.h"
 
 #include <sapi.h>
+#include <memory>
 
 namespace {
 
 enum sapi_task_kind { sapi_task_none, sapi_task_speak, sapi_task_silence, sapi_task_quit };
 
+enum class worker_lifecycle_state {
+    stopped,
+    running,
+    stopping,
+};
+
+struct worker_context {
+    HANDLE event = nullptr;
+    HANDLE stopped_event = nullptr;
+
+    worker_context() = default;
+    worker_context(const worker_context&) = delete;
+    worker_context& operator=(const worker_context&) = delete;
+
+    ~worker_context() {
+        if (event) CloseHandle(event);
+        if (stopped_event) CloseHandle(stopped_event);
+    }
+};
+
+using worker_context_ptr = std::shared_ptr<worker_context>;
+
 CRITICAL_SECTION g_sapi_lock;
-bool g_sapi_lock_ready = false;
-HANDLE g_sapi_worker = nullptr;
-HANDLE g_sapi_event = nullptr;
+worker_context_ptr g_sapi_worker_context;
+worker_lifecycle_state g_sapi_worker_state = worker_lifecycle_state::stopped;
+bool g_sapi_shutdown_requested = false;
 bool g_sapi_quit = false;
 sapi_task_kind g_sapi_task = sapi_task_none;
 std::wstring g_task_type;
@@ -51,7 +74,6 @@ void init_lock_once() {
     static INIT_ONCE once = INIT_ONCE_STATIC_INIT;
     InitOnceExecuteOnce(&once, [](PINIT_ONCE, PVOID, PVOID*) -> BOOL {
         InitializeCriticalSection(&g_sapi_lock);
-        g_sapi_lock_ready = true;
         return TRUE;
     }, nullptr, nullptr);
 }
@@ -135,7 +157,22 @@ void purge_sapi_queue(ISpVoice* voice) {
     }
 }
 
-DWORD WINAPI sapi_worker_proc(void*) {
+void mark_worker_finished(const worker_context_ptr& context) {
+    EnterCriticalSection(&g_sapi_lock);
+    if (g_sapi_worker_context.get() == context.get()) {
+        g_sapi_worker_context.reset();
+        g_sapi_worker_state = worker_lifecycle_state::stopped;
+        g_sapi_quit = false;
+        g_sapi_task = sapi_task_none;
+        g_task_type.clear();
+        g_task_voice_id.clear();
+        g_task_text.clear();
+    }
+    LeaveCriticalSection(&g_sapi_lock);
+}
+
+DWORD WINAPI sapi_worker_proc(const worker_context_ptr& context) {
+    const HANDLE workerEvent = context->event;
     HRESULT hrCo = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     bool coInitialized = SUCCEEDED(hrCo);
     ISpVoice* voice = nullptr;
@@ -143,7 +180,7 @@ DWORD WINAPI sapi_worker_proc(void*) {
     if (FAILED(hrVoice)) voice = nullptr;
 
     for (;;) {
-        WaitForSingleObject(g_sapi_event, INFINITE);
+        WaitForSingleObject(workerEvent, INFINITE);
 
         sapi_task_kind kind = sapi_task_none;
         std::wstring type, voiceId, text;
@@ -177,21 +214,57 @@ DWORD WINAPI sapi_worker_proc(void*) {
 bool ensure_worker() {
     init_lock_once();
     EnterCriticalSection(&g_sapi_lock);
-    if (g_sapi_worker) {
-        LeaveCriticalSection(&g_sapi_lock);
-        return true;
-    }
-    g_sapi_quit = false;
-    g_sapi_task = sapi_task_none;
-    g_sapi_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    if (!g_sapi_event) {
+    if (g_sapi_shutdown_requested || g_sapi_worker_state == worker_lifecycle_state::stopping) {
         LeaveCriticalSection(&g_sapi_lock);
         return false;
     }
-    g_sapi_worker = CreateThread(nullptr, 0, sapi_worker_proc, nullptr, 0, nullptr);
-    if (!g_sapi_worker) {
-        CloseHandle(g_sapi_event);
-        g_sapi_event = nullptr;
+    if (g_sapi_worker_state == worker_lifecycle_state::running) {
+        const bool ready = g_sapi_worker_context &&
+            g_sapi_worker_context->event != nullptr &&
+            g_sapi_worker_context->stopped_event != nullptr;
+        LeaveCriticalSection(&g_sapi_lock);
+        return ready;
+    }
+
+    worker_context_ptr context;
+    try {
+        context = std::make_shared<worker_context>();
+    } catch (...) {
+        LeaveCriticalSection(&g_sapi_lock);
+        return false;
+    }
+
+    context->event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!context->event) {
+        LeaveCriticalSection(&g_sapi_lock);
+        return false;
+    }
+    context->stopped_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!context->stopped_event) {
+        LeaveCriticalSection(&g_sapi_lock);
+        return false;
+    }
+
+    g_sapi_quit = false;
+    g_sapi_task = sapi_task_none;
+    g_sapi_worker_context = context;
+    g_sapi_worker_state = worker_lifecycle_state::running;
+    try {
+        // SDK-managed worker lifetime keeps this component loaded until the
+        // worker has finished COM and SAPI cleanup.
+        fb2k::splitTask([context]() {
+            try {
+                sapi_worker_proc(context);
+            } catch (...) {
+                // The worker must always signal stopped_event, even if an
+                // unexpected exception escapes the SAPI wrapper.
+            }
+            mark_worker_finished(context);
+            SetEvent(context->stopped_event);
+        });
+    } catch (...) {
+        g_sapi_worker_context.reset();
+        g_sapi_worker_state = worker_lifecycle_state::stopped;
         LeaveCriticalSection(&g_sapi_lock);
         return false;
     }
@@ -201,14 +274,19 @@ bool ensure_worker() {
 
 void post_task(sapi_task_kind kind, const wchar_t* voiceType, const wchar_t* voiceId, int rate, const wchar_t* text, bool interrupt) {
     if (!ensure_worker()) return;
+    HANDLE event = nullptr;
     EnterCriticalSection(&g_sapi_lock);
+    if (g_sapi_shutdown_requested || g_sapi_worker_state != worker_lifecycle_state::running || !g_sapi_worker_context) {
+        LeaveCriticalSection(&g_sapi_lock);
+        return;
+    }
     g_sapi_task = kind;
     g_task_type = voiceType ? voiceType : L"sapi5";
     g_task_voice_id = voiceId ? voiceId : L"";
     g_task_text = text ? text : L"";
     g_task_rate = rate;
     g_task_interrupt = interrupt;
-    HANDLE event = g_sapi_event;
+    event = g_sapi_worker_context->event;
     LeaveCriticalSection(&g_sapi_lock);
     if (event) SetEvent(event);
 }
@@ -259,33 +337,31 @@ void sapi_queue_silence() {
 
 void sapi_shutdown() {
     init_lock_once();
-    HANDLE worker = nullptr;
+    worker_context_ptr context;
     HANDLE event = nullptr;
     EnterCriticalSection(&g_sapi_lock);
-    if (g_sapi_worker) {
+    g_sapi_shutdown_requested = true;
+    if (g_sapi_worker_state == worker_lifecycle_state::running && g_sapi_worker_context) {
+        g_sapi_worker_state = worker_lifecycle_state::stopping;
+        context = g_sapi_worker_context;
+    } else if (g_sapi_worker_state == worker_lifecycle_state::stopping) {
+        context = g_sapi_worker_context;
+    }
+    if (context) {
         g_sapi_quit = true;
         g_sapi_task = sapi_task_quit;
-        worker = g_sapi_worker;
-        event = g_sapi_event;
+        event = context->event;
     }
     LeaveCriticalSection(&g_sapi_lock);
 
+    if (!context) return;
     if (event) SetEvent(event);
-    if (worker) WaitForSingleObject(worker, 5000);
 
-    EnterCriticalSection(&g_sapi_lock);
-    if (g_sapi_worker) {
-        CloseHandle(g_sapi_worker);
-        g_sapi_worker = nullptr;
+    const DWORD waitResult = context->stopped_event
+        ? WaitForSingleObject(context->stopped_event, 5000) : WAIT_FAILED;
+    if (waitResult != WAIT_OBJECT_0) {
+        // Do not close either event while the SDK-managed worker may still be
+        // executing SAPI or COM cleanup. A later shutdown call can wait again.
+        return;
     }
-    if (g_sapi_event) {
-        CloseHandle(g_sapi_event);
-        g_sapi_event = nullptr;
-    }
-    g_sapi_quit = false;
-    g_sapi_task = sapi_task_none;
-    g_task_type.clear();
-    g_task_voice_id.clear();
-    g_task_text.clear();
-    LeaveCriticalSection(&g_sapi_lock);
 }

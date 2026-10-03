@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "tolk_bridge.h"
+#include <memory>
 
 namespace {
 using Tolk_Load_t = void(__cdecl*)();
@@ -27,9 +28,31 @@ CRITICAL_SECTION g_tolk_lock;
 CRITICAL_SECTION g_task_lock;
 bool g_locks_ready = false;
 
-HANDLE g_worker = nullptr;
-HANDLE g_event = nullptr;
-HANDLE g_stopped_event = nullptr;
+enum class worker_lifecycle_state {
+    stopped,
+    running,
+    stopping,
+};
+
+struct worker_context {
+    HANDLE event = nullptr;
+    HANDLE stopped_event = nullptr;
+
+    worker_context() = default;
+    worker_context(const worker_context&) = delete;
+    worker_context& operator=(const worker_context&) = delete;
+
+    ~worker_context() {
+        if (event) CloseHandle(event);
+        if (stopped_event) CloseHandle(stopped_event);
+    }
+};
+
+using worker_context_ptr = std::shared_ptr<worker_context>;
+
+worker_context_ptr g_worker_context;
+worker_lifecycle_state g_worker_state = worker_lifecycle_state::stopped;
+bool g_shutdown_requested = false;
 bool g_worker_quit = false;
 task_kind g_task = task_none;
 std::wstring g_task_text;
@@ -44,23 +67,6 @@ void init_locks_once() {
         g_locks_ready = true;
         return TRUE;
     }, nullptr, nullptr);
-}
-
-// Must be called while g_task_lock is held. A worker signals stopped_event
-// only after it has finished using the event and all Tolk entry points.
-void cleanup_finished_worker_locked() {
-    if (!g_worker || !g_stopped_event) return;
-    if (WaitForSingleObject(g_stopped_event, 0) != WAIT_OBJECT_0) return;
-
-    CloseHandle(g_worker);
-    g_worker = nullptr;
-    if (g_event) CloseHandle(g_event);
-    g_event = nullptr;
-    CloseHandle(g_stopped_event);
-    g_stopped_event = nullptr;
-    g_worker_quit = false;
-    g_task = task_none;
-    g_task_text.clear();
 }
 
 bool safe_try_sapi(Tolk_TrySAPI_t fn, bool enable) {
@@ -226,9 +232,22 @@ void unload_direct() {
     LeaveCriticalSection(&g_tolk_lock);
 }
 
-DWORD WINAPI worker_proc(void*) {
+void mark_worker_finished(const worker_context_ptr& context) {
+    EnterCriticalSection(&g_task_lock);
+    if (g_worker_context.get() == context.get()) {
+        g_worker_context.reset();
+        g_worker_state = worker_lifecycle_state::stopped;
+        g_worker_quit = false;
+        g_task = task_none;
+        g_task_text.clear();
+    }
+    LeaveCriticalSection(&g_task_lock);
+}
+
+DWORD WINAPI worker_proc(const worker_context_ptr& context) {
+    const HANDLE workerEvent = context->event;
     for (;;) {
-        WaitForSingleObject(g_event, INFINITE);
+        WaitForSingleObject(workerEvent, INFINITE);
 
         task_kind kind = task_none;
         std::wstring text;
@@ -248,64 +267,86 @@ DWORD WINAPI worker_proc(void*) {
 
     silence_direct();
     unload_direct();
-    HANDLE stoppedEvent = nullptr;
-    EnterCriticalSection(&g_task_lock);
-    stoppedEvent = g_stopped_event;
-    LeaveCriticalSection(&g_task_lock);
-    if (stoppedEvent) SetEvent(stoppedEvent);
     return 0;
 }
 
 bool ensure_worker() {
     init_locks_once();
     EnterCriticalSection(&g_task_lock);
-    cleanup_finished_worker_locked();
-    if (g_worker) {
+    if (g_shutdown_requested || g_worker_state == worker_lifecycle_state::stopping) {
         LeaveCriticalSection(&g_task_lock);
-        return true;
+        return false;
+    }
+    if (g_worker_state == worker_lifecycle_state::running) {
+        const bool ready = g_worker_context &&
+            g_worker_context->event != nullptr &&
+            g_worker_context->stopped_event != nullptr;
+        LeaveCriticalSection(&g_task_lock);
+        return ready;
     }
 
-    if (g_component_dir.empty()) g_component_dir = current_dll_dir();
+    worker_context_ptr context;
+    try {
+        context = std::make_shared<worker_context>();
+    } catch (...) {
+        LeaveCriticalSection(&g_task_lock);
+        return false;
+    }
+
+    context->event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!context->event) {
+        LeaveCriticalSection(&g_task_lock);
+        return false;
+    }
+    context->stopped_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!context->stopped_event) {
+        LeaveCriticalSection(&g_task_lock);
+        return false;
+    }
+
     g_worker_quit = false;
     g_task = task_none;
-    g_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    if (!g_event) {
+    g_worker_context = context;
+    g_worker_state = worker_lifecycle_state::running;
+    try {
+        // SDK-managed worker lifetime keeps the component loaded until the
+        // worker has finished all Tolk calls and handle cleanup.
+        fb2k::splitTask([context]() {
+            try {
+                worker_proc(context);
+            } catch (...) {
+                // Always signal the stopped event below so shutdown can
+                // release its reference without closing a live worker handle.
+            }
+            mark_worker_finished(context);
+            SetEvent(context->stopped_event);
+        });
+    } catch (...) {
+        g_worker_context.reset();
+        g_worker_state = worker_lifecycle_state::stopped;
         LeaveCriticalSection(&g_task_lock);
         return false;
     }
-
-    g_stopped_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (!g_stopped_event) {
-        CloseHandle(g_event);
-        g_event = nullptr;
-        LeaveCriticalSection(&g_task_lock);
-        return false;
-    }
-
-    g_worker = CreateThread(nullptr, 0, worker_proc, nullptr, 0, nullptr);
-    if (!g_worker) {
-        CloseHandle(g_stopped_event);
-        g_stopped_event = nullptr;
-        CloseHandle(g_event);
-        g_event = nullptr;
-        LeaveCriticalSection(&g_task_lock);
-        return false;
-    }
-
     LeaveCriticalSection(&g_task_lock);
     return true;
 }
 
 void post_task(task_kind kind, const wchar_t* text, bool interrupt) {
     if (!ensure_worker()) return;
+    HANDLE event = nullptr;
     EnterCriticalSection(&g_task_lock);
+    if (g_shutdown_requested || g_worker_state != worker_lifecycle_state::running || !g_worker_context) {
+        LeaveCriticalSection(&g_task_lock);
+        return;
+    }
     g_task = kind;
     g_task_text = text ? text : L"";
     g_task_interrupt = interrupt;
-    HANDLE event = g_event;
+    event = g_worker_context->event;
     LeaveCriticalSection(&g_task_lock);
     if (event) SetEvent(event);
 }
+
 }
 
 void tolk_queue_speak(const wchar_t* text, bool interrupt) {
@@ -319,40 +360,34 @@ void tolk_queue_silence() {
 
 void tolk_shutdown() {
     init_locks_once();
-    HANDLE worker = nullptr;
+    worker_context_ptr context;
     HANDLE event = nullptr;
-    HANDLE stoppedEvent = nullptr;
     EnterCriticalSection(&g_task_lock);
-    cleanup_finished_worker_locked();
-    if (g_worker) {
+    g_shutdown_requested = true;
+    if (g_worker_state == worker_lifecycle_state::running && g_worker_context) {
+        g_worker_state = worker_lifecycle_state::stopping;
+        context = g_worker_context;
+    } else if (g_worker_state == worker_lifecycle_state::stopping) {
+        // A previous shutdown may still be waiting for a blocked Tolk call.
+        // Reuse the same context and wait again instead of closing handles.
+        context = g_worker_context;
+    }
+    if (context) {
         g_worker_quit = true;
         g_task = task_quit;
-        worker = g_worker;
-        event = g_event;
-        stoppedEvent = g_stopped_event;
+        event = context->event;
     }
     LeaveCriticalSection(&g_task_lock);
 
+    if (!context) return;
     if (event) SetEvent(event);
-    if (!worker) {
-        unload_direct();
-        return;
-    }
 
-    const DWORD waitResult = stoppedEvent
-        ? WaitForSingleObject(stoppedEvent, 5000) : WAIT_FAILED;
+    const DWORD waitResult = context->stopped_event
+        ? WaitForSingleObject(context->stopped_event, 5000) : WAIT_FAILED;
     if (waitResult != WAIT_OBJECT_0) {
-        // Never close handles or touch Tolk while the worker may still be in
-        // a screen reader call. The worker signals stopped_event after its
-        // final Tolk call, and the next lifecycle operation reclaims handles.
-        if (waitResult == WAIT_TIMEOUT) {
-            // No component logger is available here; leaving the handles
-            // owned by the worker is the important part of this path.
-        }
+        // Do not close either event while the SDK-managed worker may still be
+        // executing a Tolk call. The worker owns final cleanup and signals
+        // stopped_event only after its last Tolk call has returned.
         return;
     }
-
-    EnterCriticalSection(&g_task_lock);
-    cleanup_finished_worker_locked();
-    LeaveCriticalSection(&g_task_lock);
 }
