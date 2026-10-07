@@ -6,6 +6,7 @@ namespace {
 using Tolk_Load_t = void(__cdecl*)();
 using Tolk_Unload_t = void(__cdecl*)();
 using Tolk_TrySAPI_t = void(__cdecl*)(bool);
+using Tolk_IsLoaded_t = bool(__cdecl*)();
 using Tolk_Output_t = bool(__cdecl*)(const wchar_t*, bool);
 using Tolk_Speak_t = bool(__cdecl*)(const wchar_t*, bool);
 using Tolk_Silence_t = bool(__cdecl*)();
@@ -13,16 +14,17 @@ using Tolk_Silence_t = bool(__cdecl*)();
 enum task_kind { task_none, task_speak, task_silence, task_quit };
 
 HMODULE g_tolk = nullptr;
-HMODULE g_nvda_driver = nullptr;
-HMODULE g_boy_driver = nullptr;
-HMODULE g_zdsr_driver = nullptr;
 Tolk_Load_t pLoad = nullptr;
 Tolk_Unload_t pUnload = nullptr;
 Tolk_TrySAPI_t pTrySAPI = nullptr;
+Tolk_IsLoaded_t pIsLoaded = nullptr;
 Tolk_Output_t pOutput = nullptr;
 Tolk_Speak_t pSpeak = nullptr;
 Tolk_Silence_t pSilence = nullptr;
 bool g_loaded = false;
+bool g_load_failed = false;
+
+constexpr wchar_t k_tolk_file_name[] = L"foo_output_device_switcher_tolk.dll";
 
 CRITICAL_SECTION g_tolk_lock;
 CRITICAL_SECTION g_task_lock;
@@ -81,6 +83,18 @@ bool safe_load(Tolk_Load_t fn) {
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
+bool safe_unload(Tolk_Unload_t fn) {
+    if (!fn) return true;
+    __try { fn(); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+bool safe_is_loaded(Tolk_IsLoaded_t fn) {
+    if (!fn) return true;
+    __try { return fn(); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
 template<typename Fn>
 bool safe_text_call(Fn fn, const wchar_t* text, bool interrupt) {
     if (!fn) return false;
@@ -94,61 +108,115 @@ void safe_silence(Tolk_Silence_t fn) {
     __except (EXCEPTION_EXECUTE_HANDLER) { }
 }
 
-std::wstring current_dll_dir() {
-    pfc::string8 path = core_api::get_my_full_path();
-    std::wstring wide = pfc::stringcvt::string_wide_from_utf8(path).get_ptr();
-    size_t slash = wide.find_last_of(L"\\/");
-    return slash == std::wstring::npos ? L"" : wide.substr(0, slash);
+void debug_log(const std::wstring& message) {
+    std::wstring line = L"foo_output_device_switcher: ";
+    line += message;
+    line += L"\r\n";
+    OutputDebugStringW(line.c_str());
 }
 
-class scoped_tolk_load_environment {
-public:
-    explicit scoped_tolk_load_environment(const std::wstring& directory) {
-        m_mutex = CreateMutexW(nullptr, FALSE, L"Local\\foobar2000.tolk-runtime-load");
-        if (!m_mutex) return;
+std::wstring module_path(HMODULE module) {
+    if (!module) return L"";
 
-        DWORD waitResult = WaitForSingleObject(m_mutex, 10000);
-        if (waitResult != WAIT_OBJECT_0 && waitResult != WAIT_ABANDONED) return;
-        m_locked = true;
-
-        DWORD required = GetDllDirectoryW(0, nullptr);
-        if (required > 0) {
-            std::vector<wchar_t> buffer(static_cast<size_t>(required) + 1);
-            DWORD copied = GetDllDirectoryW(static_cast<DWORD>(buffer.size()), buffer.data());
-            if (copied > 0 && copied < buffer.size()) {
-                m_previous.assign(buffer.data(), copied);
-                m_had_previous = true;
-            }
+    std::vector<wchar_t> buffer(512);
+    for (;;) {
+        SetLastError(ERROR_SUCCESS);
+        const DWORD length = GetModuleFileNameW(
+            module, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (length == 0) return L"";
+        if (length < buffer.size() - 1) {
+            return std::wstring(buffer.data(), length);
         }
+        if (buffer.size() >= 32768) return L"";
+        buffer.resize(buffer.size() * 2);
+    }
+}
 
-        m_ready = !directory.empty() && SetDllDirectoryW(directory.c_str()) != FALSE;
+std::wstring directory_from_path(const std::wstring& path) {
+    const std::size_t separator = path.find_last_of(L"\\/");
+    if (separator == std::wstring::npos) return L"";
+    return path.substr(0, separator);
+}
+
+std::wstring current_dll_dir() {
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&current_dll_dir),
+            &module)) {
+        debug_log(L"component module lookup failed; error=" +
+            std::to_wstring(GetLastError()));
+        return L"";
     }
 
-    ~scoped_tolk_load_environment() {
-        if (m_ready) SetDllDirectoryW(m_had_previous ? m_previous.c_str() : nullptr);
-        if (m_locked) ReleaseMutex(m_mutex);
-        if (m_mutex) CloseHandle(m_mutex);
+    const std::wstring path = module_path(module);
+    const std::wstring directory = directory_from_path(path);
+    if (directory.empty()) {
+        debug_log(L"component module path lookup failed");
+    }
+    return directory;
+}
+
+std::wstring join_path(const std::wstring& directory, const wchar_t* name) {
+    if (directory.empty() || !name || !*name) return L"";
+    std::wstring path = directory;
+    if (path.back() != L'\\' && path.back() != L'/') path += L'\\';
+    path += name;
+    return path;
+}
+
+void log_runtime_driver_paths(const std::wstring& tolk_dir) {
+#ifdef _WIN64
+    const std::pair<const wchar_t*, const wchar_t*> drivers[] = {
+        {L"NVDA driver", L"ods-nvda-client-64bits.dll"},
+        {L"Boy driver", L"ods-br-x64.dll"},
+        {L"ZDSR driver", L"ods-zsr_x64.dll"},
+        {L"System Access driver", L"odssa64.dll"},
+    };
+#else
+    const std::pair<const wchar_t*, const wchar_t*> drivers[] = {
+        {L"NVDA driver", L"ods-nvda-client-32bits.dll"},
+        {L"Boy driver", L"ods-br.dll"},
+        {L"ZDSR driver", L"ods-zsr.dll"},
+        {L"System Access driver", L"odssa32.dll"},
+        {L"SuperNova driver", L"odsdol32.dll"},
+    };
+#endif
+
+    for (const auto& driver : drivers) {
+        const std::wstring path = join_path(tolk_dir, driver.second);
+        const DWORD attributes = GetFileAttributesW(path.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES) {
+            debug_log(std::wstring(driver.first) + L" file missing: " + path +
+                L"; error=" + std::to_wstring(GetLastError()));
+        } else {
+            debug_log(std::wstring(driver.first) + L" file: " + path);
+        }
+    }
+}
+
+void log_loaded_runtime_driver(const wchar_t* role, const wchar_t* name) {
+    if (!name || !*name) return;
+    HMODULE module = GetModuleHandleW(name);
+    if (!module) {
+        debug_log(std::wstring(role ? role : L"runtime") +
+            L" was not loaded by Tolk: " + name);
+        return;
     }
 
-    bool ready() const { return m_ready; }
-
-private:
-    HANDLE m_mutex = nullptr;
-    bool m_locked = false;
-    bool m_ready = false;
-    bool m_had_previous = false;
-    std::wstring m_previous;
-};
-
-HMODULE load_runtime_file(const std::wstring& directory, const wchar_t* name) {
-    if (directory.empty() || !name || !*name) return nullptr;
-    return LoadLibraryW((directory + L"\\" + name).c_str());
+    const std::wstring actual_path = module_path(module);
+    std::wstring message = role ? role : L"runtime";
+    message += L" loaded by Tolk: ";
+    message += actual_path.empty() ? name : actual_path;
+    debug_log(message);
 }
 
 void reset_tolk_symbols() {
     pLoad = nullptr;
     pUnload = nullptr;
     pTrySAPI = nullptr;
+    pIsLoaded = nullptr;
     pOutput = nullptr;
     pSpeak = nullptr;
     pSilence = nullptr;
@@ -156,37 +224,47 @@ void reset_tolk_symbols() {
 
 bool ensure_loaded() {
     if (g_loaded && (pSpeak || pOutput)) return true;
+    if (g_load_failed) return false;
 
     if (g_component_dir.empty()) g_component_dir = current_dll_dir();
+    if (g_component_dir.empty()) {
+        g_load_failed = true;
+        return false;
+    }
 
-    std::wstring tolk_dir = g_component_dir;
-    if (!tolk_dir.empty()) tolk_dir += L"\\tolk";
+    const std::wstring tolk_dir = join_path(g_component_dir, L"tolk");
+    const wchar_t* architecture = sizeof(void*) == 8 ? L"x64" : L"x86";
+    debug_log(std::wstring(L"loading Tolk runtime; architecture=") +
+        architecture + L"; component_dir=" + g_component_dir);
+    log_runtime_driver_paths(tolk_dir);
 
-    scoped_tolk_load_environment loadEnvironment(tolk_dir);
-    if (!loadEnvironment.ready()) return false;
+    const std::wstring path = join_path(tolk_dir, k_tolk_file_name);
+    SetLastError(ERROR_SUCCESS);
+    g_tolk = LoadLibraryExW(
+        path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!g_tolk) {
+        g_load_failed = true;
+        debug_log(L"Tolk runtime failed to load: " + path + L"; error=" +
+            std::to_wstring(GetLastError()));
+        return false;
+    }
 
-#ifdef _WIN64
-    if (!g_nvda_driver) g_nvda_driver = load_runtime_file(tolk_dir, L"ods-nvda-client-64bits.dll");
-    if (!g_boy_driver) g_boy_driver = load_runtime_file(tolk_dir, L"ods-br-x64.dll");
-    if (!g_zdsr_driver) g_zdsr_driver = load_runtime_file(tolk_dir, L"ods-zsr_x64.dll");
-#else
-    if (!g_nvda_driver) g_nvda_driver = load_runtime_file(tolk_dir, L"ods-nvda-client-32bits.dll");
-    if (!g_boy_driver) g_boy_driver = load_runtime_file(tolk_dir, L"ods-br.dll");
-    if (!g_zdsr_driver) g_zdsr_driver = load_runtime_file(tolk_dir, L"ods-zsr.dll");
-#endif
-
-    std::wstring path = tolk_dir;
-    if (!path.empty()) path += L"\\TolkODS.dll";
-    g_tolk = LoadLibraryW(path.c_str());
-    if (!g_tolk) return false;
+    const std::wstring actual_tolk_path = module_path(g_tolk);
+    std::wstring loaded_message = L"Tolk runtime loaded: ";
+    loaded_message += path;
+    if (!actual_tolk_path.empty()) loaded_message += L"; actual=" + actual_tolk_path;
+    debug_log(loaded_message);
 
     pLoad = reinterpret_cast<Tolk_Load_t>(GetProcAddress(g_tolk, "Tolk_Load"));
     pUnload = reinterpret_cast<Tolk_Unload_t>(GetProcAddress(g_tolk, "Tolk_Unload"));
     pTrySAPI = reinterpret_cast<Tolk_TrySAPI_t>(GetProcAddress(g_tolk, "Tolk_TrySAPI"));
+    pIsLoaded = reinterpret_cast<Tolk_IsLoaded_t>(GetProcAddress(g_tolk, "Tolk_IsLoaded"));
     pOutput = reinterpret_cast<Tolk_Output_t>(GetProcAddress(g_tolk, "Tolk_Output"));
     pSpeak = reinterpret_cast<Tolk_Speak_t>(GetProcAddress(g_tolk, "Tolk_Speak"));
     pSilence = reinterpret_cast<Tolk_Silence_t>(GetProcAddress(g_tolk, "Tolk_Silence"));
     if (!pLoad || !pUnload || (!pSpeak && !pOutput)) {
+        g_load_failed = true;
+        debug_log(L"Tolk runtime is missing required exports");
         FreeLibrary(g_tolk);
         g_tolk = nullptr;
         reset_tolk_symbols();
@@ -195,11 +273,38 @@ bool ensure_loaded() {
 
     safe_try_sapi(pTrySAPI, false);
     if (!safe_load(pLoad)) {
+        g_load_failed = true;
+        debug_log(L"Tolk_Load raised an exception");
+        // Tolk may have partially initialized a driver before the exception.
+        // Keep the module mapped and stop using it rather than unloading code
+        // whose internal state is no longer known to be consistent.
+        reset_tolk_symbols();
+        return false;
+    }
+
+    if (!safe_is_loaded(pIsLoaded)) {
+        g_load_failed = true;
+        debug_log(L"Tolk_Load returned but Tolk reports not loaded");
+        // Keep the module mapped on an initialization failure. The isolated
+        // runtime owns the driver handles and may have performed partial work.
         reset_tolk_symbols();
         return false;
     }
 
     g_loaded = true;
+    debug_log(L"Tolk_Load succeeded");
+#ifdef _WIN64
+    log_loaded_runtime_driver(L"NVDA driver", L"ods-nvda-client-64bits.dll");
+    log_loaded_runtime_driver(L"Boy driver", L"ods-br-x64.dll");
+    log_loaded_runtime_driver(L"ZDSR driver", L"ods-zsr_x64.dll");
+    log_loaded_runtime_driver(L"System Access driver", L"odssa64.dll");
+#else
+    log_loaded_runtime_driver(L"NVDA driver", L"ods-nvda-client-32bits.dll");
+    log_loaded_runtime_driver(L"Boy driver", L"ods-br.dll");
+    log_loaded_runtime_driver(L"ZDSR driver", L"ods-zsr.dll");
+    log_loaded_runtime_driver(L"System Access driver", L"odssa32.dll");
+    log_loaded_runtime_driver(L"SuperNova driver", L"odsdol32.dll");
+#endif
     return true;
 }
 
@@ -228,7 +333,31 @@ void silence_direct() {
 void unload_direct() {
     init_locks_once();
     EnterCriticalSection(&g_tolk_lock);
-    if (g_loaded && pSilence) safe_silence(pSilence);
+    if (g_loaded) {
+        if (pSilence) safe_silence(pSilence);
+
+        const bool unloaded = safe_unload(pUnload);
+        g_loaded = false;
+        reset_tolk_symbols();
+        if (unloaded) {
+            debug_log(L"Tolk_Unload succeeded");
+            if (g_tolk) {
+                if (FreeLibrary(g_tolk)) {
+                    g_tolk = nullptr;
+                } else {
+                    g_load_failed = true;
+                    debug_log(L"Tolk runtime FreeLibrary failed; error=" +
+                        std::to_wstring(GetLastError()));
+                }
+            }
+        } else {
+            // Keep the module mapped if a driver fails during Tolk_Unload.
+            // This is safer than freeing code that may still be referenced
+            // by a screen-reader callback or worker inside a driver.
+            g_load_failed = true;
+            debug_log(L"Tolk_Unload raised an exception; keeping runtime loaded");
+        }
+    }
     LeaveCriticalSection(&g_tolk_lock);
 }
 
@@ -379,7 +508,10 @@ void tolk_shutdown() {
     }
     LeaveCriticalSection(&g_task_lock);
 
-    if (!context) return;
+    if (!context) {
+        unload_direct();
+        return;
+    }
     if (event) SetEvent(event);
 
     const DWORD waitResult = context->stopped_event

@@ -1,117 +1,147 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DistRoot = Join-Path $Root "dist"
-$TolkRoot = Join-Path $Root "third_party\tolk-with-zdsr"
+$TolkSupportRoot = Join-Path $Root "third_party\tolk-with-zdsr"
+$TolkBuildRoot = Join-Path $Root "build\tolk-isolated"
+$TolkFileName = "foo_output_device_switcher_tolk.dll"
 $MainSource = Get-Content (Join-Path $Root "third_party\foobar2000-sdk\foobar2000\foo_output_device_switcher\main.cpp") -Raw -Encoding UTF8
 $VersionMatch = [regex]::Match($MainSource, 'DECLARE_COMPONENT_VERSION\([^,]+,\s*"([^"]+)"')
 if (-not $VersionMatch.Success) { throw "Unable to read component version from main.cpp." }
 $Version = $VersionMatch.Groups[1].Value
 
 function Require-File($Path) {
-    if (-not (Test-Path $Path)) { throw "Missing file: $Path" }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Missing file: $Path" }
 }
 
 function Require-Directory($Path) {
-    if (-not (Test-Path $Path)) { throw "Missing directory: $Path" }
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { throw "Missing directory: $Path" }
 }
 
-function Replace-FixedByteSequence(
+function Contains-FixedByteSequence(
     [byte[]]$Data,
-    [byte[]]$OldBytes,
-    [byte[]]$NewBytes,
-    [string]$Description
+    [byte[]]$Pattern
 ) {
-    if ($OldBytes.Length -ne $NewBytes.Length) {
-        throw "Replacement length mismatch for ${Description}: $($OldBytes.Length) != $($NewBytes.Length)"
+    if ($Pattern.Length -eq 0 -or $Data.Length -lt $Pattern.Length) {
+        return $false
     }
 
-    $Matches = 0
-    for ($Index = 0; $Index -le $Data.Length - $OldBytes.Length; $Index++) {
+    for ($Index = 0; $Index -le $Data.Length - $Pattern.Length; $Index++) {
         $Equal = $true
-        for ($Offset = 0; $Offset -lt $OldBytes.Length; $Offset++) {
-            if ($Data[$Index + $Offset] -ne $OldBytes[$Offset]) {
+        for ($Offset = 0; $Offset -lt $Pattern.Length; $Offset++) {
+            if ($Data[$Index + $Offset] -ne $Pattern[$Offset]) {
                 $Equal = $false
                 break
             }
         }
-        if (-not $Equal) { continue }
-
-        [Array]::Copy($NewBytes, 0, $Data, $Index, $NewBytes.Length)
-        $Matches++
-        $Index += $OldBytes.Length - 1
+        if ($Equal) { return $true }
     }
 
-    if ($Matches -ne 1) {
-        throw "Expected exactly one ${Description} occurrence in Tolk.dll, found $Matches."
-    }
+    return $false
 }
 
-function Write-Namespaced-Tolk($Source, $Destination, $ArchName) {
-    Require-File $Source
-    $Data = [IO.File]::ReadAllBytes($Source)
-
+function Get-DriverMap($ArchName) {
     if ($ArchName -eq "x64") {
-        $Replacements = @(
-            @("nvdaControllerClient64.dll", "ods-nvda-client-64bits.dll"),
-            @("byctrl-x64.dll", "ods-br-x64.dll"),
-            @("ZDSRAPI_x64.dll", "ods-zsr_x64.dll")
-        )
+        return @{
+            "nvdaControllerClient64.dll" = "ods-nvda-client-64bits.dll"
+            "byctrl-x64.dll" = "ods-br-x64.dll"
+            "ZDSRAPI_x64.dll" = "ods-zsr_x64.dll"
+            "SAAPI64.dll" = "odssa64.dll"
+        }
     } elseif ($ArchName -eq "x86") {
-        $Replacements = @(
-            @("nvdaControllerClient32.dll", "ods-nvda-client-32bits.dll"),
-            @("byctrl.dll", "ods-br.dll"),
-            @("ZDSRAPI.dll", "ods-zsr.dll")
-        )
+        return @{
+            "nvdaControllerClient32.dll" = "ods-nvda-client-32bits.dll"
+            "byctrl.dll" = "ods-br.dll"
+            "ZDSRAPI.dll" = "ods-zsr.dll"
+            "SAAPI32.dll" = "odssa32.dll"
+            "dolapi32.dll" = "odsdol32.dll"
+        }
     } else {
         throw "Unsupported Tolk architecture: $ArchName"
     }
+}
 
-    foreach ($Replacement in $Replacements) {
-        $OldName = $Replacement[0]
-        $NewName = $Replacement[1]
-        Replace-FixedByteSequence $Data `
-            ([Text.Encoding]::ASCII.GetBytes($OldName)) `
-            ([Text.Encoding]::ASCII.GetBytes($NewName)) `
-            "ASCII '$OldName'"
-        Replace-FixedByteSequence $Data `
-            ([Text.Encoding]::Unicode.GetBytes($OldName)) `
-            ([Text.Encoding]::Unicode.GetBytes($NewName)) `
-            "UTF-16 '$OldName'"
+function Get-PeMachine($Path) {
+    $Data = [IO.File]::ReadAllBytes($Path)
+    if ($Data.Length -lt 64 -or $Data[0] -ne 0x4d -or $Data[1] -ne 0x5a) {
+        throw "Not a Windows PE file: $Path"
     }
 
-    [IO.File]::WriteAllBytes($Destination, $Data)
+    $PeOffset = [BitConverter]::ToInt32($Data, 0x3c)
+    if ($PeOffset -lt 0 -or $PeOffset + 6 -gt $Data.Length) {
+        throw "Invalid PE header: $Path"
+    }
+    if ($Data[$PeOffset] -ne 0x50 -or $Data[$PeOffset + 1] -ne 0x45 -or
+        $Data[$PeOffset + 2] -ne 0 -or $Data[$PeOffset + 3] -ne 0) {
+        throw "Invalid PE signature: $Path"
+    }
+
+    return [BitConverter]::ToUInt16($Data, $PeOffset + 4)
+}
+
+function Assert-PeArchitecture($Path, $ArchName) {
+    $Expected = if ($ArchName -eq "x64") { 0x8664 } elseif ($ArchName -eq "x86") { 0x14c } else { throw "Unsupported Tolk architecture: $ArchName" }
+    $Actual = Get-PeMachine $Path
+    if ($Actual -ne $Expected) {
+        throw "Wrong PE architecture for $Path. Expected $ArchName, machine 0x$('{0:X4}' -f $Expected), got 0x$('{0:X4}' -f $Actual)."
+    }
+}
+
+function Assert-TolkDriverNames($Path, $ArchName) {
+    $Data = [IO.File]::ReadAllBytes($Path)
+    $DriverMap = Get-DriverMap $ArchName
+    foreach ($OriginalName in $DriverMap.Keys) {
+        $AsciiFound = Contains-FixedByteSequence $Data ([Text.Encoding]::ASCII.GetBytes($OriginalName))
+        $UnicodeFound = Contains-FixedByteSequence $Data ([Text.Encoding]::Unicode.GetBytes($OriginalName))
+        if ($AsciiFound -or $UnicodeFound) {
+            throw "The isolated Tolk runtime still contains the original driver name: $OriginalName"
+        }
+    }
 }
 
 function Copy-Payload($TargetDir, $ArchName, $ComponentPlatform) {
     $ComponentDll = Join-Path $Root "build\foo_output_device_switcher\Release\$ComponentPlatform\foo_output_device_switcher.dll"
-    $TolkSource = Join-Path $TolkRoot $ArchName
+    $TolkBuild = Join-Path $TolkBuildRoot $ArchName
+    $TolkSupport = Join-Path $TolkSupportRoot $ArchName
     Require-File $ComponentDll
-    Require-Directory $TolkSource
+    Require-File (Join-Path $TolkBuild "Tolk.dll")
+    Require-Directory $TolkSupport
 
     $TolkTarget = Join-Path $TargetDir "tolk"
     New-Item -ItemType Directory -Force -Path $TargetDir,$TolkTarget | Out-Null
     Copy-Item $ComponentDll $TargetDir -Force
-    Write-Namespaced-Tolk (Join-Path $TolkSource "Tolk.dll") (Join-Path $TolkTarget "TolkODS.dll") $ArchName
+    $TolkTargetPath = Join-Path $TolkTarget $TolkFileName
+    Copy-Item (Join-Path $TolkBuild "Tolk.dll") $TolkTargetPath -Force
+    Assert-PeArchitecture $ComponentDll $ArchName
+    Assert-PeArchitecture $TolkTargetPath $ArchName
+    Assert-TolkDriverNames $TolkTargetPath $ArchName
 
-    Get-ChildItem $TolkSource -File | ForEach-Object {
-        $TargetName = $_.Name
-        switch ($_.Name) {
-            "Tolk.dll" { return }
-            "nvdaControllerClient64.dll" { $TargetName = "ods-nvda-client-64bits.dll" }
-            "nvdaControllerClient32.dll" { $TargetName = "ods-nvda-client-32bits.dll" }
-            "byctrl-x64.dll" { $TargetName = "ods-br-x64.dll" }
-            "byctrl.dll" { $TargetName = "ods-br.dll" }
-            "ZDSRAPI_x64.dll" { $TargetName = "ods-zsr_x64.dll" }
-            "ZDSRAPI.dll" { $TargetName = "ods-zsr.dll" }
-        }
-        Copy-Item $_.FullName (Join-Path $TolkTarget $TargetName) -Force
+    $DriverMap = Get-DriverMap $ArchName
+    foreach ($SourceName in $DriverMap.Keys) {
+        $SourcePath = Join-Path $TolkSupport $SourceName
+        $TargetName = $DriverMap[$SourceName]
+        $TargetPath = Join-Path $TolkTarget $TargetName
+        Require-File $SourcePath
+        Copy-Item $SourcePath $TargetPath -Force
+        Assert-PeArchitecture $TargetPath $ArchName
     }
 
-    foreach ($OriginalName in "Tolk.dll", "nvdaControllerClient64.dll", "nvdaControllerClient32.dll", "byctrl-x64.dll", "byctrl.dll", "ZDSRAPI_x64.dll", "ZDSRAPI.dll") {
+    Get-ChildItem -LiteralPath $TolkSupport -File | ForEach-Object {
+        if ($_.Name -eq "Tolk.dll" -or $DriverMap.ContainsKey($_.Name)) {
+            return
+        }
+        if ($_.Extension -in ".ini", ".conf") {
+            Copy-Item $_.FullName (Join-Path $TolkTarget $_.Name) -Force
+        }
+    }
+
+    $OriginalNames = @("Tolk.dll") + @($DriverMap.Keys)
+    foreach ($OriginalName in $OriginalNames) {
         if (Test-Path (Join-Path $TolkTarget $OriginalName)) {
             throw "Unnamespaced runtime file was packaged: $OriginalName"
         }
     }
+
+    Require-File (Join-Path $TolkTarget $TolkFileName)
 }
 
 New-Item -ItemType Directory -Force -Path $DistRoot | Out-Null

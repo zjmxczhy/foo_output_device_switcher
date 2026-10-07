@@ -13,8 +13,8 @@
 请按 foobar2000 的架构选择安装包：
 
 ```text
-foo_output_device_switcher-0.2.2-x64.fb2k-component
-foo_output_device_switcher-0.2.2-x86.fb2k-component
+foo_output_device_switcher-0.2.3-x64.fb2k-component
+foo_output_device_switcher-0.2.3-x86.fb2k-component
 ```
 
 foobar2000 2.x 的 x64 版本请安装 `x64` 包；foobar2000 2.x 的 x86 版本请安装 `x86` 包。
@@ -282,13 +282,15 @@ GitHub 发布页：https://github.com/zjmxczhy/foo_output_device_switcher/releas
 
 ## Tolk 文件
 
-组件包中已经包含所需的 Tolk 文件，来源为：
+组件包中已经包含组件专用的 Tolk 运行库和读屏驱动文件。Tolk 运行库由仓库中的独立源码副本构建，来源为：
 
 ```text
 https://github.com/boz700908/tolk
 ```
 
-安装组件包后不需要手动复制 `Tolk.dll`。
+安装组件包后不需要手动复制或重命名 `Tolk.dll`。组件会从自身安装目录的 `tolk` 子目录按绝对路径加载 `foo_output_device_switcher_tolk.dll`，Tolk 也会从自己的模块目录按绝对路径加载当前架构对应的驱动文件，不会修改 foobar2000 进程的全局 DLL 搜索路径。
+
+组件使用的运行库和驱动均采用组件专用文件名，因此不会把本组件的 Tolk 或读屏驱动文件与朗读歌词组件的同名运行库混用。
 
 ## 注意事项
 
@@ -314,6 +316,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_output_device_switch
 构建完成后会重新生成：
 
 ```text
-dist\foo_output_device_switcher-0.2.2-x64.fb2k-component
-dist\foo_output_device_switcher-0.2.2-x86.fb2k-component
+dist\foo_output_device_switcher-0.2.3-x64.fb2k-component
+dist\foo_output_device_switcher-0.2.3-x86.fb2k-component
 ```

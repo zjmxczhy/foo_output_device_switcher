@@ -11,15 +11,16 @@ foobar2000 无障碍增强组件。
 - 在 `播放 -> 播放列表` 中查看当前播放列表，或切换到上一个/下一个播放列表并播放。
 - 按 foobar2000 返回的设备、播放模式、播放列表顺序循环切换。
 - 使用 Tolk 播报当前状态和切换结果。
-- 使用 `third_party\tolk-with-zdsr` 中的 Tolk 运行库，来源为 <https://github.com/boz700908/tolk>。
+- Tolk 运行库和读屏驱动按组件专用文件名放在组件自己的 `tolk` 目录中，避免与其他 foobar2000 组件相互复用 DLL。
+- 使用 `third_party\tolk-isolated` 中的独立 Tolk 源码构建运行库，读屏驱动资源来自 `third_party\tolk-with-zdsr`，来源为 <https://github.com/boz700908/tolk>。
 
 ## 安装
 
 从发布页下载：
 
 ```text
-foo_output_device_switcher-0.2.2-x64.fb2k-component
-foo_output_device_switcher-0.2.2-x86.fb2k-component
+foo_output_device_switcher-0.2.3-x64.fb2k-component
+foo_output_device_switcher-0.2.3-x86.fb2k-component
 ```
 
 foobar2000 2.x 的 x64 版本请安装 `x64` 包；foobar2000 2.x 的 x86 版本请安装 `x86` 包。
@@ -47,8 +48,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_output_device_switch
 构建输出：
 
 ```text
-dist\foo_output_device_switcher-0.2.2-x64.fb2k-component
-dist\foo_output_device_switcher-0.2.2-x86.fb2k-component
+dist\foo_output_device_switcher-0.2.3-x64.fb2k-component
+dist\foo_output_device_switcher-0.2.3-x86.fb2k-component
 ```
 
 当前 SDK 目标为 foobar2000 1.5 / 1.6 兼容 API。1.4 及更早版本不作为正式支持目标。
